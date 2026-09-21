@@ -266,6 +266,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
         delete_image = action(get_str('deleteImg'), self.delete_image, 'Ctrl+Shift+D', 'close', get_str('deleteImgDetail'))
 
+        move_image = action(get_str('moveImg'), self.move_image, 'Ctrl+Shift+M', 'file', get_str('moveImgDetail'))
+
         reset_all = action(get_str('resetAll'), self.reset_all, None, 'resetall', get_str('resetAllDetail'))
 
         color1 = action(get_str('boxLineColor'), self.choose_color1,
@@ -381,7 +383,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
         # Store actions for further handling.
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
+        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image, moveImg=move_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
@@ -428,7 +430,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.display_label_option.triggered.connect(self.toggle_paint_labels_option)
 
         add_actions(self.menus.file,
-                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
+                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, move_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
         add_actions(self.menus.view, (
             self.auto_saving,
@@ -1540,19 +1542,111 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.setEnabled(False)
         self.actions.saveAs.setEnabled(False)
 
+    def remove_image_from_list(self, index):
+        """Drop one entry from the image list and from the file list widget."""
+        if 0 <= index < len(self.m_img_list):
+            del self.m_img_list[index]
+        if 0 <= index < self.file_list_widget.count():
+            self.file_list_widget.takeItem(index)
+        self.img_count = len(self.m_img_list)
+
+    def open_image_at_index(self, index):
+        """Open the image now at `index`, or the previous one if it was the last."""
+        if self.img_count <= 0:
+            self.close_file()
+            return
+        self.cur_img_idx = min(max(index, 0), self.img_count - 1)
+        self.load_file(self.m_img_list[self.cur_img_idx])
+
+    def annotation_file_paths(self, image_path):
+        """Existing annotation files that belong to the given image."""
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
+        folders = [os.path.dirname(image_path)]
+        if self.default_save_dir and os.path.isdir(self.default_save_dir):
+            folders.append(self.default_save_dir)
+        paths = []
+        known = set()
+        for folder in folders:
+            for suffix in (XML_EXT, TXT_EXT, JSON_EXT):
+                path = os.path.join(folder, base_name + suffix)
+                key = os.path.normcase(os.path.abspath(path))
+                if key not in known and os.path.isfile(path):
+                    known.add(key)
+                    paths.append(path)
+        return paths
+
+    def current_image_index(self):
+        """Position of the image being annotated inside the image list.
+
+        cur_img_idx is only maintained by next/prev navigation, so it can drift
+        from the image actually loaded (e.g. after load_file()).
+        """
+        if self.file_path in self.m_img_list:
+            return self.m_img_list.index(self.file_path)
+        return self.cur_img_idx
+
+    def continue_after_image_removed(self, index):
+        """Refresh the file list, then open the next image in the original order."""
+        self.remove_image_from_list(index)
+        self.set_clean()
+        if self.img_count > 0:
+            self.open_image_at_index(index)
+        else:
+            self.close_file()
+
     def delete_image(self):
-        delete_path = self.file_path
-        if delete_path is not None:
-            idx = self.cur_img_idx
-            if os.path.exists(delete_path):
-                os.remove(delete_path)
-            self.import_dir_images(self.last_open_dir)
-            if self.img_count > 0:
-                self.cur_img_idx = min(idx, self.img_count - 1)
-                filename = self.m_img_list[self.cur_img_idx]
-                self.load_file(filename)
-            else:
-                self.close_file()
+        """Delete the current image and its annotations, then open the next one."""
+        if self.file_path is None:
+            return
+        file_name = os.path.basename(self.file_path)
+        if QMessageBox.question(
+                self, __appname__,
+                u'Delete "%s"?\nThis cannot be undone.' % file_name,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            return
+        index = self.current_image_index()
+        image_path = self.file_path
+        try:
+            os.remove(image_path)
+        except OSError as e:
+            self.error_message(u'Error deleting image', u'<b>%s</b>' % e)
+            return
+        for annotation_path in self.annotation_file_paths(image_path):
+            try:
+                os.remove(annotation_path)
+            except OSError as e:
+                print('Could not delete %s: %s' % (annotation_path, e))
+        self.statusBar().showMessage('Deleted %s' % file_name)
+        self.continue_after_image_removed(index)
+
+    def move_image(self):
+        """Move the current image and its annotations to another directory."""
+        if self.file_path is None:
+            return
+        target_dir = ustr(QFileDialog.getExistingDirectory(
+            self, '%s - Move the current image to' % __appname__, self.current_path(),
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks))
+        if not target_dir:
+            return
+        index = self.current_image_index()
+        image_path = self.file_path
+        moved_image_path = os.path.join(target_dir, os.path.basename(image_path))
+        if os.path.normcase(os.path.abspath(moved_image_path)) == \
+                os.path.normcase(os.path.abspath(image_path)):
+            return
+        annotation_paths = self.annotation_file_paths(image_path)
+        try:
+            shutil.move(image_path, moved_image_path)
+            for annotation_path in annotation_paths:
+                shutil.move(annotation_path,
+                            os.path.join(target_dir, os.path.basename(annotation_path)))
+        except (OSError, shutil.Error) as e:
+            self.error_message(u'Error moving image', u'<b>%s</b>' % e)
+            return
+        self.statusBar().showMessage('Moved %s to %s' %
+                                     (os.path.basename(image_path), target_dir))
+        self.continue_after_image_removed(index)
 
     def reset_all(self):
         self.settings.reset()
