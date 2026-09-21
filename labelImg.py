@@ -113,6 +113,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.label_hist:
             self.default_label = self.label_hist[0]
         else:
+            self.default_label = None
             print("Not find:/data/predefined_classes.txt (optional)")
 
         # Main widgets and related state.
@@ -764,7 +765,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        self.cur_img_idx = self.m_img_list.index(ustr(item.text()))
+        # The item text shows a path relative to the opened folder, so the
+        # absolute path is stored in the item data to locate the image.
+        file_path = ustr(item.data(Qt.UserRole))
+        if file_path not in self.m_img_list:
+            return
+        self.cur_img_idx = self.m_img_list.index(file_path)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
@@ -1373,7 +1379,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.img_count = len(self.m_img_list)
         self.open_next_image()
         for imgPath in self.m_img_list:
-            item = QListWidgetItem(imgPath)
+            # Show the path relative to the opened folder, but keep the
+            # absolute path in the item data for internal use.
+            item = QListWidgetItem(os.path.relpath(imgPath, dir_path))
+            item.setData(Qt.UserRole, imgPath)
             self.file_list_widget.addItem(item)
 
     def verify_image(self, _value=False):
@@ -1709,7 +1718,8 @@ def get_main_app(argv=None):
     win = MainWindow(args.image_dir,
                      args.class_file,
                      args.save_dir)
-    win.show()
+    # Show the main window maximized by default.
+    win.showMaximized()
     return app, win
 
 
