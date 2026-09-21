@@ -495,8 +495,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.move(position)
         save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
         self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
+        # Remember the annotation directory of the last session so that it can
+        # be kept even when the previous image directory is reopened below.
+        remembered_save_dir = None
         if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
             self.default_save_dir = save_dir
+            remembered_save_dir = save_dir
             self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
                                          (__appname__, self.default_save_dir))
             self.statusBar().show()
@@ -520,6 +524,11 @@ class MainWindow(QMainWindow, WindowMixin):
         # Populate the File menu dynamically.
         self.update_file_menu()
 
+        # Restore the image directory of the last session when no path was
+        # provided on the command line.
+        if not self.file_path and self.last_open_dir and os.path.isdir(self.last_open_dir):
+            self.file_path = self.last_open_dir
+
         # Since loading the file may take some time, make sure it runs in the background.
         if self.file_path and os.path.isdir(self.file_path):
             self.queue_event(partial(self.import_dir_images, self.file_path or ""))
@@ -538,7 +547,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Open Dir if default file
         if self.file_path and os.path.isdir(self.file_path):
-            self.open_dir_dialog(dir_path=self.file_path, silent=True)
+            # Keep the remembered annotation directory when the previous
+            # session is restored, otherwise it would be reset to the image dir.
+            self.open_dir_dialog(dir_path=self.file_path, silent=True,
+                                 keep_save_dir=remembered_save_dir is not None)
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -1346,7 +1358,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.load_create_ml_json_by_filename(filename, self.file_path)         
         
 
-    def open_dir_dialog(self, _value=False, dir_path=None, silent=False):
+    def open_dir_dialog(self, _value=False, dir_path=None, silent=False, keep_save_dir=False):
         if not self.may_continue():
             return
 
@@ -1363,7 +1375,10 @@ class MainWindow(QMainWindow, WindowMixin):
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
-        self.default_save_dir = target_dir_path
+        # Opening a directory switches the annotation directory to it, unless we
+        # are only restoring the previous session with a remembered save dir.
+        if not keep_save_dir:
+            self.default_save_dir = target_dir_path
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
