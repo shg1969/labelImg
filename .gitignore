@@ -7,6 +7,10 @@ labelImg.egg-info*
 
 build/
 dist/
+*.spec
+
+# Generated from resources/icons/app.png by build-tools/build_windows_exe.py
+resources/icons/app.ico
 
 tags
 cscope*
