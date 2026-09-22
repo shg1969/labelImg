@@ -202,6 +202,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.canvas.newShape.connect(self.new_shape)
         self.canvas.shapeMoved.connect(self.set_dirty)
+        self.canvas.shapeMoved.connect(self.update_size_labels)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
 
@@ -547,6 +548,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_coordinates = QLabel('')
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
+        # Display the size of the current image and of the selected box
+        self.image_size_label = QLabel('')
+        self.shape_size_label = QLabel('')
+        for size_label in (self.image_size_label, self.shape_size_label):
+            size_label.setContentsMargins(6, 0, 6, 0)
+            self.statusBar().addPermanentWidget(size_label)
+
         # Open Dir if default file
         if self.file_path and os.path.isdir(self.file_path):
             # Keep the remembered annotation directory when the previous
@@ -664,6 +672,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_file = None
         self.canvas.reset_state()
         self.label_coordinates.clear()
+        # Cleared after canvas.reset_state(), which emits selectionChanged and
+        # would otherwise repopulate these labels from the previous image.
+        self.image_size_label.clear()
+        self.shape_size_label.clear()
         self.combo_box.cb.clear()
 
     def current_item(self):
@@ -816,6 +828,22 @@ class MainWindow(QMainWindow, WindowMixin):
         except:
             pass
 
+    def update_size_labels(self):
+        """Show the size of the current image and of the selected box."""
+        if self.image.isNull():
+            self.image_size_label.setText('')
+        else:
+            self.image_size_label.setText(
+                'Image: %d x %d' % (self.image.width(), self.image.height()))
+
+        shape = self.canvas.selected_shape
+        if shape is None:
+            self.shape_size_label.setText('')
+        else:
+            rect = shape.bounding_rect()
+            self.shape_size_label.setText(
+                'Box: %d x %d' % (round(rect.width()), round(rect.height())))
+
     # React to canvas signals.
     def shape_selection_changed(self, selected=False):
         if self._no_selection_slot:
@@ -831,6 +859,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.edit.setEnabled(selected)
         self.actions.shapeLineColor.setEnabled(selected)
         self.actions.shapeFillColor.setEnabled(selected)
+        self.update_size_labels()
 
     def add_label(self, shape):
         shape.paint_label = self.display_label_option.isChecked()
@@ -1169,6 +1198,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.image = image
             self.file_path = unicode_file_path
             self.canvas.load_pixmap(QPixmap.fromImage(image))
+            self.update_size_labels()
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
             self.set_clean()
@@ -1692,6 +1722,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def delete_selected_shape(self):
         self.remove_label(self.canvas.delete_selected())
         self.set_dirty()
+        self.update_size_labels()
         if self.no_shapes():
             for action in self.actions.onShapesPresent:
                 action.setEnabled(False)
