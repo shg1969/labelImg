@@ -171,6 +171,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock.setWidget(label_list_container)
 
         self.file_list_widget = QListWidget()
+        # Allow selecting several images at once, e.g. to copy their names.
+        self.file_list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
@@ -376,6 +378,44 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_list.customContextMenuRequested.connect(
             self.pop_label_list_menu)
 
+        # File list context menu: sorting and copying file names.
+        sort_by_default = action(get_str('fileListSortDefault'),
+                                 partial(self.sort_file_list, None, False))
+        sort_by_name_asc = action(get_str('fileListSortNameAsc'),
+                                  partial(self.sort_file_list, 'name', False))
+        sort_by_name_desc = action(get_str('fileListSortNameDesc'),
+                                   partial(self.sort_file_list, 'name', True))
+        sort_by_mtime_asc = action(get_str('fileListSortMtimeAsc'),
+                                   partial(self.sort_file_list, 'mtime', False))
+        sort_by_mtime_desc = action(get_str('fileListSortMtimeDesc'),
+                                    partial(self.sort_file_list, 'mtime', True))
+        sort_by_size_asc = action(get_str('fileListSortSizeAsc'),
+                                  partial(self.sort_file_list, 'size', False))
+        sort_by_size_desc = action(get_str('fileListSortSizeDesc'),
+                                   partial(self.sort_file_list, 'size', True))
+        copy_file_name = action(get_str('fileListCopyName'),
+                                partial(self.copy_file_names, 'name'))
+        copy_file_stem = action(get_str('fileListCopyStem'),
+                                partial(self.copy_file_names, 'stem'))
+        copy_relative_path = action(get_str('fileListCopyRelative'),
+                                    partial(self.copy_file_names, 'relative'))
+        copy_full_path = action(get_str('fileListCopyFull'),
+                                partial(self.copy_file_names, 'full'))
+
+        file_menu = QMenu()
+        sort_menu = QMenu(get_str('fileListSort'), file_menu)
+        add_actions(sort_menu, (sort_by_default, None,
+                                sort_by_name_asc, sort_by_name_desc, None,
+                                sort_by_mtime_asc, sort_by_mtime_desc, None,
+                                sort_by_size_asc, sort_by_size_desc))
+        copy_menu = QMenu(get_str('fileListCopy'), file_menu)
+        add_actions(copy_menu, (copy_file_name, copy_file_stem,
+                                copy_relative_path, copy_full_path))
+        add_actions(file_menu, (sort_menu, copy_menu))
+        self.file_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_list_widget.customContextMenuRequested.connect(
+            self.pop_file_list_menu)
+
         # Draw squares/rectangles
         self.draw_squares_option = QAction(get_str('drawSquares'), self)
         self.draw_squares_option.setShortcut('Ctrl+Shift+R')
@@ -411,7 +451,8 @@ class MainWindow(QMainWindow, WindowMixin):
             view=self.menu(get_str('menu_view')),
             help=self.menu(get_str('menu_help')),
             recentFiles=QMenu(get_str('menu_openRecent')),
-            labelList=label_menu)
+            labelList=label_menu,
+            fileList=file_menu)
 
         # Auto saving : Enable auto saving if pressing next
         self.auto_saving = QAction(get_str('autoSaveMode'), self)
@@ -775,6 +816,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def pop_label_list_menu(self, point):
         self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
+
+    def pop_file_list_menu(self, point):
+        # Right-clicking an unselected item selects it first, like a file manager.
+        item = self.file_list_widget.itemAt(point)
+        if item is not None and not item.isSelected():
+            self.file_list_widget.clearSelection()
+            item.setSelected(True)
+        self.menus.fileList.exec_(self.file_list_widget.mapToGlobal(point))
 
     def edit_label(self):
         if not self.canvas.editing():
@@ -1157,6 +1206,7 @@ class MainWindow(QMainWindow, WindowMixin):
             if unicode_file_path in self.m_img_list:
                 index = self.m_img_list.index(unicode_file_path)
                 file_widget_item = self.file_list_widget.item(index)
+                self.file_list_widget.clearSelection()
                 file_widget_item.setSelected(True)
             else:
                 self.file_list_widget.clear()
@@ -1414,6 +1464,86 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
+    def image_display_path(self, img_path):
+        """Path of an image as shown in the file list, relative to the folder."""
+        if self.dir_name:
+            try:
+                return os.path.relpath(img_path, self.dir_name)
+            except ValueError:  # e.g. paths on different drives on Windows
+                pass
+        return img_path
+
+    def refresh_file_list_widget(self):
+        """Rebuild the file list from m_img_list, keeping the selection."""
+        selected = set(ustr(item.data(Qt.UserRole))
+                       for item in self.file_list_widget.selectedItems())
+        current_path = ustr(self.file_path)
+        self.file_list_widget.clear()
+        scroll_to = None
+        for index, img_path in enumerate(self.m_img_list):
+            item = QListWidgetItem(self.image_display_path(img_path))
+            item.setData(Qt.UserRole, img_path)
+            item.setToolTip(ustr(img_path))
+            self.file_list_widget.addItem(item)
+            if ustr(img_path) in selected or \
+                    (not selected and ustr(img_path) == current_path):
+                item.setSelected(True)
+                scroll_to = index
+        self.img_count = len(self.m_img_list)
+        if scroll_to is not None:
+            self.file_list_widget.scrollToItem(
+                self.file_list_widget.item(scroll_to))
+
+    def sort_file_list(self, key=None, reverse=False):
+        """Sort the image list, then rebuild the file list widget.
+
+        key: None    default order, i.e. a natural sort by full path
+             'name'  natural sort by file name
+             'mtime' last modified time
+             'size'  file size in bytes
+        """
+        if key is None:
+            natural_sort(self.m_img_list, key=lambda path: path.lower())
+        elif key == 'name':
+            natural_sort(self.m_img_list,
+                         key=lambda path: os.path.basename(path).lower())
+            if reverse:
+                self.m_img_list.reverse()
+        elif key == 'mtime':
+            self.m_img_list.sort(key=file_mtime, reverse=reverse)
+        elif key == 'size':
+            self.m_img_list.sort(key=file_size, reverse=reverse)
+        else:
+            raise ValueError('Unknown sort key: %r' % key)
+        self.refresh_file_list_widget()
+
+    def selected_file_paths(self):
+        """Absolute paths of the images selected in the file list."""
+        paths = [ustr(item.data(Qt.UserRole))
+                 for item in self.file_list_widget.selectedItems()]
+        paths = [path for path in paths if path]
+        if not paths and self.file_path:
+            paths = [ustr(self.file_path)]
+        return paths
+
+    def copy_file_names(self, mode='name'):
+        """Copy the selected file names (or paths) to the clipboard."""
+        paths = self.selected_file_paths()
+        if not paths:
+            return
+        if mode == 'name':
+            texts = [os.path.basename(path) for path in paths]
+        elif mode == 'stem':
+            texts = [os.path.splitext(os.path.basename(path))[0]
+                     for path in paths]
+        elif mode == 'relative':
+            texts = [self.image_display_path(path) for path in paths]
+        else:
+            texts = paths
+        QApplication.clipboard().setText('\n'.join(texts))
+        self.statusBar().showMessage('Copied %d item(s) to clipboard'
+                                     % len(texts))
+
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
             return
@@ -1425,12 +1555,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
         self.open_next_image()
-        for imgPath in self.m_img_list:
-            # Show the path relative to the opened folder, but keep the
-            # absolute path in the item data for internal use.
-            item = QListWidgetItem(os.path.relpath(imgPath, dir_path))
-            item.setData(Qt.UserRole, imgPath)
-            self.file_list_widget.addItem(item)
+        self.refresh_file_list_widget()
 
     def verify_image(self, _value=False):
         # Proceeding next image without dialog if having any label
@@ -1817,6 +1942,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
+
+def file_mtime(path):
+    """Last modification time of a file, or 0 if it cannot be stat'ed."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+def file_size(path):
+    """Size of a file in bytes, or 0 if it cannot be stat'ed."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])
