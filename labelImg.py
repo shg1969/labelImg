@@ -573,10 +573,10 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.file_path and self.last_open_dir and os.path.isdir(self.last_open_dir):
             self.file_path = self.last_open_dir
 
-        # Since loading the file may take some time, make sure it runs in the background.
-        if self.file_path and os.path.isdir(self.file_path):
-            self.queue_event(partial(self.import_dir_images, self.file_path or ""))
-        elif self.file_path:
+        # A single image is loaded in the background. Directories are opened by
+        # open_dir_dialog() below; queueing them here as well scanned the folder
+        # twice, and with auto save on that popped up the save-dir dialog twice.
+        if self.file_path and not os.path.isdir(self.file_path):
             self.queue_event(partial(self.load_file, self.file_path or ""))
 
         # Callbacks:
@@ -1278,6 +1278,8 @@ class MainWindow(QMainWindow, WindowMixin):
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
 
     def show_bounding_box_from_annotation_file(self, file_path):
+        if file_path is None:
+            return
         if self.default_save_dir is not None:
             basename = os.path.basename(os.path.splitext(file_path)[0])
             xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
@@ -1444,11 +1446,19 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.may_continue():
             return
 
-        default_open_dir_path = dir_path if dir_path else '.'
-        if self.last_open_dir and os.path.exists(self.last_open_dir):
+        # An explicitly given directory wins; otherwise fall back to the last
+        # used one, then to the folder holding the current image. Note that
+        # file_path may itself be a directory, so dirname() only applies to files.
+        if dir_path:
+            default_open_dir_path = dir_path
+        elif self.last_open_dir and os.path.exists(self.last_open_dir):
             default_open_dir_path = self.last_open_dir
+        elif self.file_path and os.path.isdir(self.file_path):
+            default_open_dir_path = self.file_path
+        elif self.file_path:
+            default_open_dir_path = os.path.dirname(self.file_path)
         else:
-            default_open_dir_path = os.path.dirname(self.file_path) if self.file_path else '.'
+            default_open_dir_path = '.'
         if silent != True:
             target_dir_path = ustr(QFileDialog.getExistingDirectory(self,
                                                                     '%s - Open Directory' % __appname__, default_open_dir_path,
@@ -1456,10 +1466,12 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
+        save_dir_before_scan = self.default_save_dir
         self.import_dir_images(target_dir_path)
-        # Opening a directory switches the annotation directory to it, unless we
-        # are only restoring the previous session with a remembered save dir.
-        if not keep_save_dir:
+        # Opening a directory switches the annotation directory to it, unless a
+        # remembered one must be kept, or the user just picked one in the dialog
+        # that import_dir_images() may open while auto save is enabled.
+        if not keep_save_dir and self.default_save_dir == save_dir_before_scan:
             self.default_save_dir = target_dir_path
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
@@ -1582,8 +1594,9 @@ class MainWindow(QMainWindow, WindowMixin):
                 if self.dirty is True:
                     self.save_file()
             else:
+                # Ask for a target directory, but carry on and open the image
+                # afterwards: returning here left the canvas empty.
                 self.change_save_dir_dialog()
-                return
 
         if not self.may_continue():
             return
@@ -1607,8 +1620,9 @@ class MainWindow(QMainWindow, WindowMixin):
                 if self.dirty is True:
                     self.save_file()
             else:
+                # Ask for a target directory, but carry on and open the image
+                # afterwards: returning here left the canvas empty.
                 self.change_save_dir_dialog()
-                return
 
         if not self.may_continue():
             return
