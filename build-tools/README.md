@@ -2,8 +2,12 @@
 
 ```
 cd [ROOT]
-sh build-tools/build-for-pypi.sh
+make pip_upload          # Linux / macOS
+python setup.py upload   # Windows (no make)
 ```
+
+This rebuilds the sdist/wheel, uploads it with `twine` and pushes the version
+tag. See `UploadCommand` in `setup.py`. Requires `twine` (`pip install twine`).
 
 ### Build a Windows EXE natively (recommended)
 
